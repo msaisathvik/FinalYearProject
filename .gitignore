@@ -1,0 +1,16 @@
+# data and outputs
+dataset/
+output/
+output_*/
+model_snapshots/
+*.pth.tar
+
+# python
+__pycache__/
+*.pyc
+.env
+venv/
+*.egg-info/
+
+# OS
+.DS_Store
