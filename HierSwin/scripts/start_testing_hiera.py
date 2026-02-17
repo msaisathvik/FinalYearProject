@@ -49,13 +49,8 @@ def load_data(test_csv, data_root, distributed):
         ])
 
     print("Loading test data")
-    # Point to the test folder (assuming nested like train/val)
-    test_root = os.path.join(data_root, 'test', 'test')
-    # If nested structure is not consistent, we might need to check.
-    # But assuming consistency with train/val.
-    if not os.path.exists(test_root):
-         # Fallback to non-nested if not found
-         test_root = os.path.join(data_root, 'test')
+    # Point to the testDataset folder
+    test_root = os.path.join(data_root, 'testDataset')
          
     dataset_test = InputDataset(test_csv, test_root, False, test_transform,
             albu_transform=test_albu_transform)

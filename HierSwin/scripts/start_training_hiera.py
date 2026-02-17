@@ -82,15 +82,15 @@ def load_data(train_csv, val_csv, data_root, distributed):
 
     print("Loading training data")
     st = time.time()
-    # Point to the train folder
-    train_root = os.path.join(data_root, 'train', 'train')
+    # Point to the trainDataset folder
+    train_root = os.path.join(data_root, 'trainDataset')
     dataset = InputDataset(train_csv, train_root, True, train_transform,
             albu_transform=train_albu_transform)
     print("Took", time.time() - st)
 
     print("Loading validation data")
-    # Point to the val folder
-    val_root = os.path.join(data_root, 'val', 'val')
+    # Point to the valDataset folder
+    val_root = os.path.join(data_root, 'valDataset')
     dataset_test = InputDataset(val_csv, val_root, False, test_transform,
             albu_transform=test_albu_transform)
 
