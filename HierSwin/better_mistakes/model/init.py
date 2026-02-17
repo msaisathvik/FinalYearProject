@@ -29,16 +29,8 @@ def init_model_on_gpu(gpus_per_node, opts):
     elif opts.arch == "swinT":
         feature_dim = 1536
     elif opts.arch == "hiera":
-        # HieRA feature dim depends on the variant, assuming base/large?
-        # Let's check HieRA implementation or set a default.
-        # HieRA usually has 768 or similar. Let's inspect HieRA class if needed.
-        # For now, setting to 768 as a placeholder, or better yet, get it from model.
-        # But model is already initialized.
-        # Let's assume 768 for now or check model.head.in_features if it exists?
-        # Actually, HieRA in this repo might not use feature_dim in the same way.
-        # But init.py uses it for FC layer construction if devise/barzdenzler is used.
-        # Since we disabled those, we might just need it defined to avoid error.
-        feature_dim = 768 
+        # Use the feature dim reported by the model (Swin-Large => 1536 in this repo).
+        feature_dim = getattr(model, "feature_dim", 1536)
     else:
         ValueError("Unknown architecture ", opts.arch)
 
@@ -71,8 +63,11 @@ def init_model_on_gpu(gpus_per_node, opts):
             else:
                 model.fc = torch.nn.Sequential(torch.nn.Linear(in_features=feature_dim, out_features=opts.embedding_size, bias=True))
     else:
-        # model.fc = torch.nn.Sequential(torch.nn.Dropout(opts.dropout), torch.nn.Linear(in_features=feature_dim, out_features=opts.num_classes, bias=True))
-        model.head =torch.nn.Linear(in_features=feature_dim, out_features=opts.num_classes)
+        # For HieRA, the model already defines `head_l1/head_l2/head_l3`.
+        # Do not attach an unused `head` layer (it bloats the checkpoint and confuses loading).
+        if opts.arch != "hiera":
+            # model.fc = torch.nn.Sequential(torch.nn.Dropout(opts.dropout), torch.nn.Linear(in_features=feature_dim, out_features=opts.num_classes, bias=True))
+            model.head = torch.nn.Linear(in_features=feature_dim, out_features=opts.num_classes)
 
     if torch.cuda.is_available():
         if distributed:

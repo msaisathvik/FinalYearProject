@@ -2,8 +2,22 @@ import time
 import numpy as np
 import os.path
 import torch
-from conditional import conditional
-import tensorboardX
+from contextlib import nullcontext
+
+# Optional dependency: tensorboardX (fallback to torch.utils.tensorboard if available)
+try:
+    import tensorboardX  # type: ignore
+except Exception:  # pragma: no cover
+    tensorboardX = None
+
+# The original code depended on the external `conditional` package.
+# To make training runnable in Kaggle (and other minimal envs), we provide a local equivalent.
+def conditional(condition, context_manager):
+    """
+    Return `context_manager` if condition is True, else a no-op context.
+    """
+    return context_manager if condition else nullcontext()
+
 from better_mistakes.model.performance import accuracy
 import torch.nn.functional as F
 from .tct_get_tree_target import get_order_family_target
@@ -18,7 +32,7 @@ def run_hiera(loader, model, loss_function, opts, epoch, prev_steps, optimizer=N
     descriptor = "VAL" if is_inference else "TRAIN"
     loss_id = "loss/" + opts.loss
     
-    with_tb = opts.out_folder is not None
+    with_tb = (opts.out_folder is not None) and (tensorboardX is not None)
     if with_tb:
         tb_writer = tensorboardX.SummaryWriter(os.path.join(opts.out_folder, "tb", descriptor.lower()))
 
@@ -33,6 +47,9 @@ def run_hiera(loader, model, loss_function, opts, epoch, prev_steps, optimizer=N
     all_preds_l1, all_targets_l1 = [], []
     all_preds_l2, all_targets_l2 = [], []
     all_preds_l3, all_targets_l3 = [], []
+
+    # In case the loader is empty, keep a defined steps value.
+    tot_steps = prev_steps
     
     if is_inference:
         model.eval()
@@ -45,11 +62,15 @@ def run_hiera(loader, model, loss_function, opts, epoch, prev_steps, optimizer=N
             this_load_time = time.time() - time_load0
             this_rest0 = time.time()
             
-            if torch.cuda.is_available() and opts.gpu is not None:
-                images = images.cuda(opts.gpu, non_blocking=True)
+            # Move to the same device as the model (robust for CPU/GPU and avoids device mismatch)
+            device = next(model.parameters()).device
+            images = images.to(device, non_blocking=torch.cuda.is_available())
             
             # Get targets for all levels
             target_l1, target_l2, target_l3 = get_order_family_target(target)
+            target_l1 = target_l1.to(device)
+            target_l2 = target_l2.to(device)
+            target_l3 = target_l3.to(device)
             
             # Forward pass
             output = model(images) # (logits_l1, logits_l2, logits_l3, features)
@@ -119,6 +140,12 @@ def run_hiera(loader, model, loss_function, opts, epoch, prev_steps, optimizer=N
                     tb_writer.add_scalar(loss_id, loss.item(), tot_steps)
                     tb_writer.add_scalar("accuracy/L1", acc_l1[0].item(), tot_steps)
                     tb_writer.add_scalar("accuracy/L3", acc_l3[0].item(), tot_steps)
+
+    if num_logged == 0:
+        raise RuntimeError(
+            "No batches were processed. Check that your CSV paths resolve to existing images, "
+            "and that dataset size is >= 1 (and not dropped by `drop_last`)."
+        )
 
     # Calculate Epoch Metrics
     # L1

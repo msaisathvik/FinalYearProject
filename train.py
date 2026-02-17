@@ -150,22 +150,28 @@ def main_worker(gpus_per_node, opts):
     dataset, dataset_test, train_sampler, test_sampler = load_data(opts.train_csv, opts.val_csv, opts.data_dir, False)
     train_loader = torch.utils.data.DataLoader(
         dataset, batch_size=batch_size,
-        sampler=train_sampler, num_workers=opts.workers, pin_memory=True, drop_last=True)
+        sampler=train_sampler, num_workers=opts.workers, pin_memory=True, drop_last=False)
 
     val_loader = torch.utils.data.DataLoader(
         dataset_test, batch_size=batch_size,
-        sampler=test_sampler, num_workers=opts.workers, pin_memory=True,drop_last=True)
+        sampler=test_sampler, num_workers=opts.workers, pin_memory=True, drop_last=False)
     
     # Adjust the number of epochs to the size of the dataset
     num_batches = len(train_loader)
     print('Number of epoches: {}'.format(opts.epochs))
 
     # Load hierarchy and classes ------------------------------------------------------------------------------------------------------------------------------
-    print(os.getcwd())
+    # Make hierarchy paths robust to current working directory (important in Kaggle notebooks).
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    print("Working dir:", os.getcwd())
+    print("Script dir:", script_dir)
+
+    distances_path = os.path.join(script_dir, "HierSwin", "data", "tct_distances.pkl")
+    tree_path = os.path.join(script_dir, "HierSwin", "data", "tct_tree.pkl")
     # Ensure these files exist or update paths if needed
-    with open('HierSwin/data/tct_distances.pkl', "rb") as f:
+    with open(distances_path, "rb") as f:
         distances = DistanceDict(pickle.load(f))
-    with open('HierSwin/data/tct_tree.pkl', "rb") as f:
+    with open(tree_path, "rb") as f:
         hierarchy = pickle.load(f)
 
     classes =  ['Normal', 'ECC', 'RPC', 'MPC', 'PG', 'Atrophy', 'EMC', 'HCG', 'ASC-US',
@@ -209,32 +215,33 @@ def main_worker(gpus_per_node, opts):
         # do we validate at this epoch?
         do_validate = epoch % opts.val_freq == 0
 
-        # name for the json file s
+        # name for the json file
         json_name = "epoch.%04d.json" % epoch
 
+        # --------------------
+        # Train
+        # --------------------
         if opts.arch == "hiera":
             summary_train, steps = run_hiera(
                 train_loader, model, loss_function, opts, epoch, steps, optimizer, is_inference=False
             )
         else:
-             raise RuntimeError("Only hiera architecture is supported in this script.")
+            raise RuntimeError("Only hiera architecture is supported in this script.")
 
-        # dump results
         with open(os.path.join(opts.out_folder, "json/train", json_name), "w") as fp:
             json.dump(summary_train, fp)
 
-        # print summary of the epoch and save checkpoint
-        state = {"epoch": epoch + 1, "steps": steps, "arch": opts.arch, "state_dict": model.state_dict(), "optimizer": optimizer.state_dict(), "is_best": is_best}
-        _save_checkpoint(state, do_validate, epoch, opts.out_folder)
-
-        # validation
+        # --------------------
+        # Validate (optional)
+        # --------------------
+        is_best = False
         if do_validate:
             if opts.arch == "hiera":
-                summary_val, steps = run_hiera(
+                summary_val, _ = run_hiera(
                     val_loader, model, loss_function, opts, epoch, steps, optimizer=None, is_inference=True
                 )
             else:
-                 raise RuntimeError("Only hiera architecture is supported in this script.")
+                raise RuntimeError("Only hiera architecture is supported in this script.")
 
             print("\nSummary for epoch %04d (for val set):" % epoch)
             pp.pprint(summary_val)
@@ -242,23 +249,37 @@ def main_worker(gpus_per_node, opts):
             with open(os.path.join(opts.out_folder, "json/val", json_name), "w") as fp:
                 json.dump(summary_val, fp)
 
-            # Early Stopping check
-            early_stopping(summary_val['loss'])
-            
-            if early_stopping.is_best:
-                print(f"Validation loss improved to {early_stopping.best_loss:.4f}. Saving best model...")
-                best_filename = os.path.join(opts.out_folder, "model_best.pth.tar")
-                torch.save(state, best_filename)
-            
+            # Early Stopping check (drives best model tracking)
+            early_stopping(summary_val["loss"])
+            is_best = early_stopping.is_best
+
             if early_stopping.early_stop:
                 print(f"Early stopping triggered at epoch {epoch}")
-                break
+
+        # --------------------
+        # Checkpointing
+        # --------------------
+        state = {
+            "epoch": epoch + 1,
+            "steps": steps,
+            "arch": opts.arch,
+            "state_dict": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "is_best": is_best,
+        }
+        _save_checkpoint(state, do_validate, epoch, opts.out_folder)
+
+        if do_validate and early_stopping.early_stop:
+            break
 
 
 def _load_checkpoint(opts, model, optimizer):
     if os.path.isfile(os.path.join(opts.out_folder, "checkpoint.pth.tar")):
         print("=> loading checkpoint '{}'".format(opts.out_folder))
-        checkpoint = torch.load(os.path.join(opts.out_folder, "checkpoint.pth.tar"))
+        map_location = None
+        if not torch.cuda.is_available():
+            map_location = "cpu"
+        checkpoint = torch.load(os.path.join(opts.out_folder, "checkpoint.pth.tar"), map_location=map_location)
         opts.start_epoch = checkpoint["epoch"]
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer"])
@@ -268,9 +289,15 @@ def _load_checkpoint(opts, model, optimizer):
         if os.path.exists(opts.pretrained_folder):
             print("=> loading pretrained checkpoint '{}'".format(opts.pretrained_folder))
             if os.path.isdir(opts.pretrained_folder):
-                checkpoint = torch.load(os.path.join(opts.pretrained_folder, "checkpoint.pth.tar"))
+                map_location = None
+                if not torch.cuda.is_available():
+                    map_location = "cpu"
+                checkpoint = torch.load(os.path.join(opts.pretrained_folder, "checkpoint.pth.tar"), map_location=map_location)
             else:
-                checkpoint = torch.load(opts.pretrained_folder)
+                map_location = None
+                if not torch.cuda.is_available():
+                    map_location = "cpu"
+                checkpoint = torch.load(opts.pretrained_folder, map_location=map_location)
             
             model.load_state_dict(checkpoint["state_dict"], strict=False)
             steps = 0
@@ -321,7 +348,8 @@ if __name__ == "__main__":
     parser.add_argument("--optimizer", default="adam_amsgrad", choices=OPTIMIZER_NAMES, help="loss type: | ".join(OPTIMIZER_NAMES))
     parser.add_argument("--lr", default=1e-5, type=float, help="initial learning rate of optimizer")
     parser.add_argument("--weight_decay", default=0.0, type=float, help="weight decay of optimizer")
-    parser.add_argument("--pretrained", type=boolean, default=True, help="start from ilsvrc12/imagenet model weights")
+    # Kaggle notebooks frequently run with internet disabled; pretrained=True would try to download weights and crash.
+    parser.add_argument("--pretrained", type=boolean, default=False, help="start from ilsvrc12/imagenet model weights")
     parser.add_argument("--pretrained_folder", type=str, default=None, help="folder or file from which to load the network weights")
     parser.add_argument("--dropout", default=0.5, type=float, help="Prob of dropout for network FC layer")
     parser.add_argument("--data_augmentation", type=boolean, default=True, help="Train with basic data augmentation")
@@ -360,13 +388,14 @@ if __name__ == "__main__":
     opts.devise = False
     opts.barzdenzler = False
 
-    # setup output folder
+    # setup output folder (create required subfolders even if folder already exists)
     opts.out_folder = opts.output if opts.output else get_expm_folder(__file__, "out", opts.expm_id)
-    if not os.path.exists(opts.out_folder):
-        print("Making experiment folder and subfolders under: ", opts.out_folder)
-        os.makedirs(os.path.join(opts.out_folder, "json/train"))
-        os.makedirs(os.path.join(opts.out_folder, "json/val"))
-        os.makedirs(os.path.join(opts.out_folder, "model_snapshots"))
+    print("Outputs will be written under:", opts.out_folder)
+    os.makedirs(os.path.join(opts.out_folder, "json", "train"), exist_ok=True)
+    os.makedirs(os.path.join(opts.out_folder, "json", "val"), exist_ok=True)
+    os.makedirs(os.path.join(opts.out_folder, "model_snapshots"), exist_ok=True)
+    os.makedirs(os.path.join(opts.out_folder, "tb", "train"), exist_ok=True)
+    os.makedirs(os.path.join(opts.out_folder, "tb", "val"), exist_ok=True)
 
     # set if we want to output soft labels or one hot
     opts.soft_labels = opts.beta != 0

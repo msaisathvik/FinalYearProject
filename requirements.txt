@@ -6,5 +6,4 @@ numpy
 scikit-learn
 albumentations
 opencv-python
-conditional
 tensorboardX
