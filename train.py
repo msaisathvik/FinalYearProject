@@ -284,8 +284,6 @@ def _load_checkpoint(opts, model, optimizer):
 
 
 def _save_checkpoint(state, do_validate, epoch, out_folder):
-    def _save_checkpoint(state, do_validate, epoch, out_folder):
-
     os.makedirs(out_folder, exist_ok=True)
 
     # ✅ Latest checkpoint (always overwritten)
