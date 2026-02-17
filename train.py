@@ -223,7 +223,7 @@ def main_worker(gpus_per_node, opts):
             json.dump(summary_train, fp)
 
         # print summary of the epoch and save checkpoint
-        state = {"epoch": epoch + 1, "steps": steps, "arch": opts.arch, "state_dict": model.state_dict(), "optimizer": optimizer.state_dict()}
+        state = {"epoch": epoch + 1, "steps": steps, "arch": opts.arch, "state_dict": model.state_dict(), "optimizer": optimizer.state_dict(), "is_best": is_best}
         _save_checkpoint(state, do_validate, epoch, opts.out_folder)
 
         # validation
@@ -284,18 +284,20 @@ def _load_checkpoint(opts, model, optimizer):
 
 
 def _save_checkpoint(state, do_validate, epoch, out_folder):
-    filename = os.path.join(out_folder, "checkpoint.pth.tar")
-    torch.save(state, filename)
-    if do_validate and epoch % 3 == 0:
-        # Create a lightweight state for snapshots (no optimizer)
-        snapshot_state = {
-            "epoch": state["epoch"],
-            "arch": state["arch"],
-            "state_dict": state["state_dict"],
-            # "optimizer": state["optimizer"] # Exclude optimizer to save space
-        }
-        snapshot_name = "checkpoint.epoch%04d" % epoch + ".pth.tar"
-        torch.save(snapshot_state, os.path.join(out_folder, "model_snapshots", snapshot_name))
+    def _save_checkpoint(state, do_validate, epoch, out_folder):
+
+    os.makedirs(out_folder, exist_ok=True)
+
+    # ✅ Latest checkpoint (always overwritten)
+    latest_path = os.path.join(out_folder, "latest_model.pth.tar")
+    torch.save(state, latest_path)
+
+    # ✅ Best checkpoint (saved only if best)
+    if state.get("is_best", False):
+        best_path = os.path.join(out_folder, "best_model.pth.tar")
+        torch.save(state, best_path)
+
+    print(f"Checkpoint saved → Epoch {epoch}")
 
 
 def _select_optimizer(model, opts):
