@@ -111,27 +111,45 @@ def load_data(train_csv, val_csv, data_root, distributed):
 
 
 class EarlyStopping:
-    def __init__(self, patience=10, min_delta=0.0):
+    """
+    Generic early stopping on a scalar metric.
+    When mode='max' (default) it assumes higher is better (e.g. F1).
+    When mode='min' it assumes lower is better (e.g. loss).
+    """
+
+    def __init__(self, patience=10, min_delta=0.0, mode="max"):
+        if mode not in {"max", "min"}:
+            raise ValueError(f"Unsupported mode '{mode}', use 'max' or 'min'.")
         self.patience = patience
         self.min_delta = min_delta
+        self.mode = mode
         self.counter = 0
-        self.best_loss = None
+        self.best_score = None
         self.early_stop = False
         self.is_best = False
 
-    def __call__(self, val_loss):
+    def __call__(self, current_score):
         self.is_best = False
-        if self.best_loss is None:
-            self.best_loss = val_loss
+
+        if self.best_score is None:
+            # First value we see
+            self.best_score = current_score
             self.is_best = True
-        elif val_loss > self.best_loss - self.min_delta:
+            return
+
+        if self.mode == "max":
+            improved = current_score > self.best_score + self.min_delta
+        else:  # mode == "min"
+            improved = current_score < self.best_score - self.min_delta
+
+        if improved:
+            self.best_score = current_score
+            self.counter = 0
+            self.is_best = True
+        else:
             self.counter += 1
             if self.counter >= self.patience:
                 self.early_stop = True
-        else:
-            self.best_loss = val_loss
-            self.counter = 0
-            self.is_best = True
 
 def main_worker(gpus_per_node, opts):
     # Worker setup
@@ -208,7 +226,9 @@ def main_worker(gpus_per_node, opts):
 
     # Training/evaluation -------------------------------------------------------------------------------------------------------------------------------------
 
-    early_stopping = EarlyStopping(patience=opts.patience, min_delta=opts.min_delta)
+    # Early stopping: monitor validation F1 (L3 macro) by default
+    # Higher F1 is better, hence mode="max".
+    early_stopping = EarlyStopping(patience=opts.patience, min_delta=opts.min_delta, mode="max")
 
     for epoch in range(opts.start_epoch, opts.epochs):
 
@@ -249,12 +269,15 @@ def main_worker(gpus_per_node, opts):
             with open(os.path.join(opts.out_folder, "json/val", json_name), "w") as fp:
                 json.dump(summary_val, fp)
 
-            # Early Stopping check (drives best model tracking)
-            early_stopping(summary_val["loss"])
+            # Early Stopping check based on validation F1 (L3 macro)
+            val_metric = summary_val.get("f1_l3", None)
+            if val_metric is None:
+                raise KeyError("Expected key 'f1_l3' in validation summary for early stopping.")
+            early_stopping(val_metric)
             is_best = early_stopping.is_best
 
             if early_stopping.early_stop:
-                print(f"Early stopping triggered at epoch {epoch}")
+                print(f"Early stopping triggered at epoch {epoch} with best F1 (L3) = {early_stopping.best_score:.4f}")
 
         # --------------------
         # Checkpointing
