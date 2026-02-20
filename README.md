@@ -1,4 +1,4 @@
-# HiCervix Prototype
+# HiCervix 
 
 This folder contains a standalone prototype for training the HieRA model on the HiCervix dataset (sampled version).
 
